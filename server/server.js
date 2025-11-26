@@ -28,14 +28,20 @@ app.use("/api/users", userRoutes);
 // koneksi ke database
 const PORT = process.env.PORT || 5000;
 
+// 1. Koneksi ke MongoDB (Tetap dijalankan)
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log("Tersambung ke MongoDB...");
-    app.listen(PORT, () => {
-      console.log(`Server berjalan di port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("Koneksi DB Gagal:", err.message);
+  .then(() => console.log("Tersambung ke MongoDB..."))
+  .catch((err) => console.error("Koneksi DB Gagal:", err.message));
+
+// 2. Logika Menjalankan Server
+// Jika di Local (Laptop Anda), kita jalankan app.listen manual.
+// Jika di Vercel (Production), bagian ini akan DILEWATI otomatis.
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log(`Server berjalan di port ${PORT}`);
   });
+}
+
+// 3. PENTING: Export app agar Vercel bisa membacanya
+export default app;
