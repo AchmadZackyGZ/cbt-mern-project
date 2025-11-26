@@ -14,7 +14,15 @@ import userRoutes from "./routes/userRoutes.js";
 const app = express();
 
 //middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://cbt-frontend-app.vercel.app", // <-- Masukkan URL Frontend Vercel Anda di sini (tanpa garis miring di akhir)
+    ],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 // Routes
