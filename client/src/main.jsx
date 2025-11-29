@@ -13,6 +13,7 @@ import AdminQuizzes from "./pages/admin/AdminQuizzes.jsx";
 import AdminQuestions from "./pages/admin/AdminQuestions.jsx";
 import ExamPage from "./pages/ExamPage.jsx";
 import AdminResults from "./pages/admin/AdminResults.jsx";
+import LobbyPage from "./pages/LobbyPage.jsx";
 
 // Components
 import ProtectedRoute from "./components/layouts/ProtectedRoute.jsx";
@@ -58,6 +59,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           {/* Student Routes (Protected) */}
           <Route element={<ProtectedRoute />}>
             <Route path="dashboard" element={<Dashboard />} />
+            <Route path="lobby/:quizCode" element={<LobbyPage />} />
             <Route path="exam/:quizId" element={<ExamPage />} />
           </Route>
 

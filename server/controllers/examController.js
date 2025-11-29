@@ -1,148 +1,155 @@
 import asyncHandler from "express-async-handler";
+import mongoose from "mongoose";
 import Quiz from "../models/quizModel.js";
 import Question from "../models/questionModel.js";
 import Submission from "../models/submissionModel.js";
 
-// --- (Fungsi Helper untuk 'membersihkan' soal) ---
-// WAJIB: Jangan pernah kirim 'correctAnswer' ke client!
+// Helper: Bersihkan kunci jawaban sebelum dikirim ke siswa
 const sanitizeQuestions = (questions) => {
   return questions.map((q) => {
-    // Buat objek baru agar tidak mengubah data asli di server
     const sanitizedQ = q.toObject();
     delete sanitizedQ.correctAnswer;
     return sanitizedQ;
   });
 };
 
+// --- FUNGSI PENCARI KUIS PINTAR (Code / ID) ---
+const findQuizByCodeOrId = async (codeOrId) => {
+  // 1. Coba cari berdasarkan 'examCode' (kode pendek 6 karakter)
+  let quiz = await Quiz.findOne({ examCode: codeOrId });
+
+  // 2. Jika tidak ketemu DAN formatnya mirip ID MongoDB (24 char), cari by ID
+  if (!quiz && codeOrId.length === 24) {
+    try {
+      if (mongoose.Types.ObjectId.isValid(codeOrId)) {
+        quiz = await Quiz.findById(codeOrId);
+      }
+    } catch (err) {
+      return null;
+    }
+  }
+  return quiz;
+};
+
 // @desc    Memulai atau Melanjutkan kuis
-// @route   POST /api/exam/start/:quizId
-// @access  Private/Student
-const startOrResumeQuiz = asyncHandler(async (req, res) => {
-  const quizId = req.params.quizId;
+// @route   POST /api/exam/start/:quizCode
+export const startOrResumeQuiz = asyncHandler(async (req, res) => {
+  const { quizId } = req.params; // Ini sebenarnya quizCode dari URL
   const userId = req.user._id;
 
-  // 1. Cek Kuisnya ada
-  const quiz = await Quiz.findById(quizId);
+  // GUNAKAN FUNGSI PENCARI PINTAR
+  const quiz = await findQuizByCodeOrId(quizId);
+
   if (!quiz) {
     res.status(404);
     throw new Error("Kuis tidak ditemukan");
   }
 
-  // 2. Cek apakah sudah ada submission yg 'pending' (resume)
+  // Cek apakah quiz sudah active
+  if (quiz.status !== "active") {
+    res.status(403);
+    throw new Error("Ujian belum dimulai oleh Admin.");
+  }
+
+  // Cari submission yang sudah ada (dari join lobby atau sebelumnya)
   let submission = await Submission.findOne({
-    quizId,
+    quizId: quiz._id,
     userId,
-    status: "pending",
+    status: { $in: ["pending", "active"] }, // Bisa pending (dari lobby) atau active
   });
 
   if (submission) {
-    // --- KASUS RESUME ---
-    // Cek apakah waktu sudah habis (misal dia tutup browser lama)
-    if (Date.now() > submission.endTime.getTime()) {
-      submission.status = "completed";
-      // (Opsional) Otomatis hitung skor di sini jika mau
+    // Jika submission masih pending (dari lobby), update menjadi active dan reset waktu
+    if (submission.status === "pending") {
+      const startTime = new Date();
+      const endTime = new Date(
+        startTime.getTime() + quiz.durationInMinutes * 60000
+      );
+      submission.startTime = startTime;
+      submission.endTime = endTime;
+      submission.status = "active";
       await submission.save();
-      res.status(403);
-      throw new Error("Waktu ujian untuk sesi ini sudah habis");
+    } else {
+      // Jika sudah active, cek apakah waktu sudah habis
+      if (Date.now() > submission.endTime.getTime()) {
+        submission.status = "completed";
+        await submission.save();
+        res.status(403);
+        throw new Error("Waktu ujian untuk sesi ini sudah habis");
+      }
     }
   } else {
-    // --- KASUS BARU ---
-    // 3. Buat submission baru
+    // Jika tidak ada submission, buat baru (fallback)
     const startTime = new Date();
     const endTime = new Date(
       startTime.getTime() + quiz.durationInMinutes * 60000
     );
 
     submission = await Submission.create({
-      quizId,
+      quizId: quiz._id,
       userId,
       startTime,
       endTime,
       answers: {},
+      status: "active",
     });
   }
 
-  // 4. Ambil SEMUA soal untuk kuis ini
-  // Kita sort berdasarkan questionNumber agar urut (Poin 2 Anda)
-  const questions = await Question.find({ quizId }).sort({ questionNumber: 1 });
-
-  // 5. Bersihkan kunci jawaban
+  const questions = await Question.find({ quizId: quiz._id }).sort({
+    questionNumber: 1,
+  });
   const questionsForStudent = sanitizeQuestions(questions);
 
-  // 6. Kirim data ujian ke client
   res.status(200).json({
-    submission, // Berisi submissionId, endTime, answers
-    questions: questionsForStudent, // Berisi 100 soal bersih
+    submission,
+    questions: questionsForStudent,
   });
 });
 
 // @desc    Submit jawaban kuis
 // @route   POST /api/exam/submit/:submissionId
-// @access  Private/Student
-const submitQuiz = asyncHandler(async (req, res) => {
+export const submitQuiz = asyncHandler(async (req, res) => {
   const { submissionId } = req.params;
-  const { answers } = req.body; // Frontend kirim: { "questionId": "A", "questionId_2": "C" }
+  const { answers } = req.body;
   const userId = req.user._id;
 
-  // 1. Validasi Submission
   const submission = await Submission.findById(submissionId);
   if (!submission) {
     res.status(404);
     throw new Error("Sesi ujian tidak ditemukan");
   }
 
-  // Cek kepemilikan
   if (submission.userId.toString() !== userId.toString()) {
     res.status(403);
     throw new Error("Anda tidak berhak submit sesi ini");
   }
 
-  // Cek status
   if (submission.status === "completed") {
     res.status(400);
     throw new Error("Ujian sudah pernah disubmit");
   }
 
-  // Cek Waktu Habis (Poin 6)
   const submittedAt = new Date();
-
-  // Ini untuk menangani latensi jaringan saat frontend auto-submit
-  const toleranceInMilliseconds = 5000; // 5 detik
-
-  const toleranceLimit = new Date(
-    submission.endTime.getTime() + toleranceInMilliseconds
-  );
+  // Toleransi 10 detik untuk latency jaringan
+  const toleranceLimit = new Date(submission.endTime.getTime() + 10000);
 
   if (submittedAt.getTime() > toleranceLimit.getTime()) {
-    // Jika submit-nya telat DAN melebihi batas toleransi, baru kita tolak.
     res.status(403);
-    throw new Error("Waktu habis dan melebihi toleransi! Submission ditolak.");
+    throw new Error("Waktu habis! Submission ditolak.");
   }
 
-  // if (submittedAt.getTime() > submission.endTime.getTime()) {
-  //   res.status(403);
-  //   throw new Error("Waktu habis! Submission ditolak.");
-  //   // Note: Anda bisa buat logic "toleransi"
-  //   // atau auto-submit di frontend beberapa detik sebelum
-  // }
-
-  // 2. Ambil KUNCI JAWABAN dari DB (Poin 4)
   const questions = await Question.find({ quizId: submission.quizId });
 
-  // 3. Hitung Skor (WAJIB di Server)
   let score = 0;
   questions.forEach((q) => {
     const questionId = q._id.toString();
     if (answers[questionId] && answers[questionId] === q.correctAnswer) {
-      score += 1; // Benar = 1
+      score += 1;
     }
-    // Salah/Tidak dijawab = 0 (otomatis)
   });
 
-  // 4. Hitung Durasi (Poin 6)
   const duration = submittedAt.getTime() - submission.startTime.getTime();
 
-  // 5. Update Submission
   submission.answers = answers;
   submission.status = "completed";
   submission.submittedAt = submittedAt;
@@ -157,32 +164,100 @@ const submitQuiz = asyncHandler(async (req, res) => {
   });
 });
 
-// @desc    Mendapatkan Leaderboard/Ranking untuk kuis
+// @desc    Mendapatkan Leaderboard
 // @route   GET /api/exam/leaderboard/:quizId
-// @access  Private (Hanya user login yg bisa lihat)
-const getLeaderboard = asyncHandler(async (req, res) => {
+export const getLeaderboard = asyncHandler(async (req, res) => {
   const { quizId } = req.params;
 
-  // 1. Cek kuisnya ada atau tidak (opsional tapi bagus)
-  const quizExists = await Quiz.findById(quizId);
-  if (!quizExists) {
+  // GUNAKAN FUNGSI PENCARI PINTAR JUGA (Jaga-jaga admin pakai kode)
+  const quiz = await findQuizByCodeOrId(quizId);
+
+  if (!quiz) {
     res.status(404);
     throw new Error("Kuis tidak ditemukan");
   }
 
-  // 2. Query utama (Poin 6 Anda)
   const leaderboard = await Submission.find({
-    quizId: quizId,
-    status: "completed", // Hanya ambil yg sudah selesai
+    quizId: quiz._id,
+    status: "completed",
   })
-    .sort({
-      score: -1, // Urutkan berdasarkan skor TERTINGGI
-      duration: 1, // Lalu urutkan berdasarkan durasi TERCEPAT (ascending)
-    })
-    .limit(50) // Ambil 20 teratas saja (biar tidak berat)
-    .populate("userId", "namaTeam email asalSekolah"); // Ambil info nama user, jangan password!
+    .sort({ score: -1, duration: 1 })
+    .limit(50)
+    .populate("userId", "namaTeam email asalSekolah");
 
   res.status(200).json(leaderboard);
 });
 
-export { startOrResumeQuiz, submitQuiz, getLeaderboard };
+// @desc    Join Lobby (Membuat submission pending)
+// @route   POST /api/exam/join/:quizCode
+// @access  Private/Student
+export const joinLobby = asyncHandler(async (req, res) => {
+  const { quizCode } = req.params;
+  const userId = req.user._id;
+
+  // Cari quiz berdasarkan examCode
+  const quiz = await findQuizByCodeOrId(quizCode);
+  if (!quiz) {
+    res.status(404);
+    throw new Error("Kuis tidak ditemukan");
+  }
+
+  // Cek apakah sudah ada submission untuk user ini
+  let submission = await Submission.findOne({
+    quizId: quiz._id,
+    userId,
+  });
+
+  // Jika belum ada, buat submission baru dengan status pending
+  if (!submission) {
+    const startTime = new Date();
+    const endTime = new Date(
+      startTime.getTime() + quiz.durationInMinutes * 60000
+    );
+
+    submission = await Submission.create({
+      quizId: quiz._id,
+      userId,
+      startTime,
+      endTime,
+      answers: {},
+      status: "pending", // Status pending saat di lobby
+    });
+  }
+
+  res.status(200).json({
+    message: "Berhasil bergabung ke lobby",
+    quiz: {
+      title: quiz.title,
+      examCode: quiz.examCode,
+      status: quiz.status,
+    },
+    submission,
+  });
+});
+
+// @desc    Cek status kuis (Polling)
+// @route   GET /api/exam/status/:quizCode
+export const checkQuizStatus = asyncHandler(async (req, res) => {
+  const { quizCode } = req.params;
+
+  // GUNAKAN FUNGSI PENCARI PINTAR
+  const quiz = await findQuizByCodeOrId(quizCode);
+
+  if (!quiz) {
+    res.status(404);
+    throw new Error("Kuis tidak ditemukan");
+  }
+
+  // Hitung jumlah user unik yang sudah join (bukan total submission)
+  // Gunakan distinct untuk menghitung userId yang berbeda
+  const distinctUsers = await Submission.distinct("userId", {
+    quizId: quiz._id,
+  });
+  const participantCount = distinctUsers.length;
+
+  res.json({
+    status: quiz.status || "waiting",
+    participantCount,
+  });
+});

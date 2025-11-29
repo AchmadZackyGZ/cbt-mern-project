@@ -25,7 +25,7 @@ const submissionSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "completed"], // 'pending' = sedang dikerjakan
+      enum: ["pending", "active", "completed"], // 'pending' = di lobby, 'active' = sedang ujian, 'completed' = selesai
       default: "pending",
     },
 

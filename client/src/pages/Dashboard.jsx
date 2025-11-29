@@ -22,7 +22,7 @@ const Dashboard = () => {
 
     // Arahkan ke halaman ujian (akan kita buat nanti)
     // Format URL: /exam/:quizId
-    navigate(`/exam/${quizIdInput}`);
+    navigate(`/lobby/${quizIdInput}`);
   };
 
   return (
