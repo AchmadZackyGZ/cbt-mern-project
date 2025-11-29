@@ -99,6 +99,24 @@ const AdminQuizzes = () => {
     }
   };
 
+  // --- 7. FITUR BARU: Handle Reset Ujian ---
+  const handleResetQuiz = async (id) => {
+    if (
+      window.confirm(
+        "PERINGATAN: Reset akan MENGHAPUS SEMUA NILAI/HASIL siswa untuk ujian ini.\n\nStatus akan kembali ke 'Menunggu'. Lanjutkan?"
+      )
+    ) {
+      try {
+        await api.put(`/quizzes/${id}/reset`);
+        alert("Ujian berhasil di-reset!");
+        fetchQuizzes(); // Refresh tabel
+      } catch (error) {
+        console.error(error);
+        alert("Gagal mereset ujian.");
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -255,25 +273,35 @@ const AdminQuizzes = () => {
 
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <div className="flex flex-col gap-2 items-end">
-                            {/* TOMBOL START / STOP */}
+                            {/* LOGIKA TOMBOL START / STOP / RESET */}
                             <div>
-                              {quiz.status !== "active" && (
+                              {/* Jika Waiting -> Tampilkan MULAI */}
+                              {quiz.status === "waiting" && (
                                 <button
                                   onClick={() => handleStartQuiz(quiz._id)}
                                   className="text-white bg-green-600 hover:bg-green-700 px-3 py-1 rounded shadow-sm text-xs mr-2"
-                                  title="Mulai Ujian"
                                 >
                                   ▶ Mulai
                                 </button>
                               )}
 
+                              {/* Jika Active -> Tampilkan STOP */}
                               {quiz.status === "active" && (
                                 <button
                                   onClick={() => handleStopQuiz(quiz._id)}
                                   className="text-white bg-red-500 hover:bg-red-600 px-3 py-1 rounded shadow-sm text-xs mr-2"
-                                  title="Hentikan Ujian"
                                 >
                                   ⏹ Stop
+                                </button>
+                              )}
+
+                              {/* Jika Closed (Selesai) -> Tampilkan RESET (BARU) */}
+                              {quiz.status === "closed" && (
+                                <button
+                                  onClick={() => handleResetQuiz(quiz._id)}
+                                  className="text-white bg-orange-500 hover:bg-orange-600 px-3 py-1 rounded shadow-sm text-xs mr-2"
+                                >
+                                  🔄 Reset
                                 </button>
                               )}
                             </div>

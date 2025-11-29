@@ -147,3 +147,26 @@ export const updateQuizStatus = asyncHandler(async (req, res) => {
     res.json({ message: `Status ujian diubah menjadi ${status}` });
   }
 });
+
+// @desc    Reset Ujian (Status -> Waiting & Hapus Nilai Siswa)
+// @route   PUT /api/quizzes/:id/reset
+// @access  Private/Admin
+export const resetQuiz = asyncHandler(async (req, res) => {
+  const quiz = await Quiz.findById(req.params.id);
+
+  if (quiz) {
+    // 1. Kembalikan status jadi 'waiting'
+    quiz.status = "waiting";
+    await quiz.save();
+
+    // 2. Hapus semua history pengerjaan siswa (Submission) untuk kuis ini
+    await Submission.deleteMany({ quizId: quiz._id });
+
+    res.json({
+      message: "Ujian berhasil di-reset. Status menunggu & nilai dihapus.",
+    });
+  } else {
+    res.status(404);
+    throw new Error("Kuis tidak ditemukan");
+  }
+});

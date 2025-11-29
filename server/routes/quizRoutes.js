@@ -5,6 +5,7 @@ import {
   deleteQuiz,
   getQuizzes,
   updateQuizStatus,
+  resetQuiz,
 } from "../controllers/quizController.js";
 import { protect, isAdmin } from "../middlewares/authMiddleware.js";
 
@@ -16,5 +17,7 @@ router
 router.route("/:id").delete(protect, isAdmin, deleteQuiz); // Tambah DELETE route
 
 router.route("/:id/status").put(protect, isAdmin, updateQuizStatus);
+
+router.route("/:id/reset").put(protect, isAdmin, resetQuiz);
 
 export default router;
