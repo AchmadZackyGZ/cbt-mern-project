@@ -70,14 +70,14 @@ const AdminDashboard = () => {
           </Link>
 
           {/* Menu 3: Bank Soal */}
-          <div className="bg-white p-6 rounded-lg shadow-md border-l-4 border-purple-500 hover:shadow-xl transition cursor-pointer">
+          {/* <div className="bg-white p-6 rounded-lg shadow-md border-l-4 border-purple-500 hover:shadow-xl transition cursor-pointer">
             <h3 className="text-lg font-semibold text-gray-900">
               📚 Bank Soal
             </h3>
             <p className="mt-2 text-gray-600 text-sm">
               Upload gambar soal dan kelola database pertanyaan.
             </p>
-          </div>
+          </div> */}
         </div>
       </main>
     </div>
