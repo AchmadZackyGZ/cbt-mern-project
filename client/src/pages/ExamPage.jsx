@@ -216,7 +216,7 @@ const ExamPage = () => {
     };
 
     // Jalankan auto-save setiap 30 detik (lebih ringan untuk database)
-    const autoSaveInterval = setInterval(autoSaveAnswers, 30000);
+    const autoSaveInterval = setInterval(autoSaveAnswers, 5000);
 
     // Cleanup interval
     return () => clearInterval(autoSaveInterval);
