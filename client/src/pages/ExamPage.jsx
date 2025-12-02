@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { BlockMath, InlineMath } from "react-katex";
 import api from "../api/axios";
@@ -21,38 +21,114 @@ const ExamPage = () => {
     endExam,
   } = useExamStore();
 
+  // --- PERBAIKAN 1: BUAT REF UNTUK MENYIMPAN SUBMISSION ID ---
+  // Ref ini akan selalu memegang nilai terbaru, bahkan di dalam interval/timer
+  const submissionIdRef = useRef(submissionId);
+  const answersRef = useRef(answers);
+
+  // --- PERBAIKAN 2: SINKRONISASI REF DENGAN STATE ---
+  // Setiap kali submissionId berubah (misal setelah fetch data), update Ref-nya
+  useEffect(() => {
+    submissionIdRef.current = submissionId;
+  }, [submissionId]);
+
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(0);
 
-  // --- 1. DEFINISI FUNGSI UTAMA (DIPINDAH KE ATAS) ---
-  // Kita taruh sini supaya bisa dipanggil oleh useEffect di bawahnya
   const handleFinishExam = async (isAuto = false) => {
-    if (
-      !isAuto &&
-      !window.confirm(
+    // 1. Konfirmasi Manual
+    // Hanya tanya jika user mengklik tombol sendiri (bukan auto submit)
+    if (!isAuto) {
+      const isConfirmed = window.confirm(
         "Apakah Anda yakin ingin mengakhiri ujian? Jawaban tidak bisa diubah lagi."
-      )
-    ) {
+      );
+      if (!isConfirmed) return;
+    }
+
+    // --- PERBAIKAN 3: GUNAKAN REF UNTUK PENGECEKAN ID ---
+    // Jangan gunakan variabel 'submissionId' langsung, tapi gunakan 'submissionIdRef.current'
+    // AMBIL ID DARI REF (Data Paling Update)
+    const currentId = submissionIdRef.current;
+    const currentAnswers = answersRef.current;
+
+    if (!currentId) {
+      console.error(
+        "Submission ID hilang di Ref. Coba cari localStorage/Store."
+      );
+      // Darurat: Jangan langsung endExam(), cek dulu apakah benar-benar null
+      // Jika null, log error tapi jangan hapus state dulu kalau bisa di-rescue
       return;
     }
 
+    // LOGIC ERROR NULL LAWASSSSSSSSSSSSSS
+    // --- FIX UTAMA: PENCEGAHAN ERROR NULL ---
+    // Jika submissionId hilang (misal karena refresh/error), jangan panggil API!
+    // Langsung saja bersihkan dan keluar.
+    // if (!submissionId) {
+    //   console.warn("Submission ID tidak ditemukan. Keluar paksa.");
+    //   // Opsional: Coba cari backup di localStorage jika perlu /* TODO */ if error submission
+    //   // const backupId = localStorage.getItem('activeSubmissionId'); /* TODO */ if error submission
+    //   endExam();
+    //   navigate("/dashboard", { replace: true });
+    //   return;
+    // }
+
     try {
-      await api.post(`/exam/submit/${submissionId}`, {
-        answers: answers,
+      // 2. Request ke Backend // 2. Request ke Backend MENGGUNAKAN ID DARI REF agar tidak tabrakan
+      const response = await api.post(`/exam/submit/${currentId}`, {
+        answers: currentAnswers,
       });
 
-      alert("Ujian Selesai! Terima kasih.");
-      endExam(); // Bersihkan store
-      navigate("/dashboard", { replace: true });
-    } catch (error) {
-      console.error(error);
-      // Jika error karena sudah submit sebelumnya, kita paksa keluar saja
-      if (error.response?.status === 400 || error.response?.status === 403) {
-        endExam();
-        navigate("/dashboard");
+      // 3. Sukses
+      // Cek apakah sudah completed sebelumnya (sudah auto-submit oleh admin)
+      if (response.data.alreadyCompleted) {
+        console.log(
+          "Submission sudah completed sebelumnya (auto-submit oleh sistem)"
+        );
+        // Jangan kasih alert lagi karena user sudah tau dari polling
       } else {
-        alert("Gagal mengirim jawaban. Coba lagi.");
+        // Jika manual, kasih ucapan. Jika auto (waktu habis), skip ini biar tidak double alert
+        if (!isAuto) {
+          alert("Ujian Selesai! Terima kasih.");
+        }
+      }
+
+      // 4. Bersihkan Store & Redirect
+      endExam();
+      navigate("/dashboard", { replace: true }); // Pakai replace agar tidak bisa 'Back'
+    } catch (error) {
+      console.error("Submit Error:", error);
+
+      const status = error.response?.status;
+
+      // KASUS A: Fatal (400=Sudah Submit, 403=Waktu Habis, 404=Data Hilang/Reset oleh Admin)
+      if (status === 400 || status === 403 || status === 404) {
+        // JIKA 404 (Sesi Hilang), Beri pesan spesifik
+        if (status === 404) {
+          alert(
+            "Sesi ujian Anda tidak valid atau telah di-reset oleh Admin. Anda akan diarahkan keluar."
+          );
+        } else if (status === 400) {
+          // 400 bisa jadi submissionId invalid atau sudah submit
+          console.log("Submission ID invalid atau sudah diproses");
+        } else {
+          alert("Sesi ujian telah berakhir atau sudah dikumpulkan sebelumnya.");
+        }
+
+        endExam(); // <--- INI KUNCINYA: Hapus data lokal yang basi
+        navigate("/dashboard", { replace: true });
+      }
+
+      // KASUS B: Internet Bermasalah
+      else {
+        alert(
+          "Gagal mengirim jawaban (Koneksi tidak stabil). Silakan coba klik tombol Selesai lagi."
+        );
       }
     }
   };
@@ -102,7 +178,7 @@ const ExamPage = () => {
         // WAKTU HABIS
         clearInterval(interval);
         setTimeLeft(0);
-        // Panggil fungsi submit otomatis
+        // Panggil fungsi submit otomatis // Saat ini dipanggil, dia akan pakai submissionIdRef yang terbaru
         handleFinishExam(true);
       } else {
         setTimeLeft(Math.floor(distance / 1000));
@@ -113,6 +189,104 @@ const ExamPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endTime]);
   // Kita disable dependency handleFinishExam agar timer tidak reset setiap kali user menjawab soal
+
+  // --- AUTO-SAVE JAWABAN ---
+  useEffect(() => {
+    let lastSavedAnswers = {};
+
+    // Fungsi untuk menyimpan jawaban ke server
+    const autoSaveAnswers = async () => {
+      try {
+        if (
+          submissionIdRef.current &&
+          answers &&
+          Object.keys(answers).length > 0 &&
+          JSON.stringify(answers) !== JSON.stringify(lastSavedAnswers)
+        ) {
+          await api.put(`/exam/save-answers/${submissionIdRef.current}`, {
+            answers: answers,
+          });
+          lastSavedAnswers = { ...answers };
+          console.log("💾 Answers auto-saved (changes detected)");
+        }
+      } catch (error) {
+        console.error("Auto-save failed:", error);
+        // Jangan tampilkan error ke user, biarkan lanjut
+      }
+    };
+
+    // Jalankan auto-save setiap 30 detik (lebih ringan untuk database)
+    const autoSaveInterval = setInterval(autoSaveAnswers, 30000);
+
+    // Cleanup interval
+    return () => clearInterval(autoSaveInterval);
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array - hanya jalan sekali saat component mount
+
+  // --- Polling Status Ujian ---
+  useEffect(() => {
+    // Fungsi pengecek status
+    const checkStatus = async () => {
+      try {
+        const { data } = await api.get(`/exam/check-status/${quizId}`);
+
+        // Jika Admin mengubah status menjadi 'closed'
+        if (data.status === "closed") {
+          // Hentikan interval agar tidak looping alert
+          clearInterval(statusInterval);
+
+          console.log(
+            "📤 Admin stopped exam - saving final answers and notifying server"
+          );
+
+          // --- FIX: SIMPAN JAWABAN TERAKHIR SEBELUM AUTO-SUBMIT ---
+          // Pastikan jawaban terakhir tersimpan ke database sebelum server auto-submit
+          const currentAnswers = answersRef.current;
+          if (
+            submissionIdRef.current &&
+            currentAnswers &&
+            Object.keys(currentAnswers).length > 0
+          ) {
+            try {
+              await api.put(`/exam/save-answers/${submissionIdRef.current}`, {
+                answers: currentAnswers,
+              });
+              console.log("💾 Final answers saved before auto-submit");
+            } catch (saveError) {
+              console.error("Failed to save final answers:", saveError);
+              // Lanjutkan saja, server masih bisa auto-submit dengan data sebelumnya
+            }
+          }
+
+          alert(
+            "Ujian telah dihentikan oleh Admin. Jawaban Anda telah otomatis dikumpulkan."
+          );
+
+          // Clear state lokal dan redirect - server sudah handle auto-submit
+          endExam();
+          navigate("/dashboard", { replace: true });
+        }
+      } catch (error) {
+        // --- TAMBAHAN BARU: JIKA 404 SAAT POLLING ---
+        if (error.response?.status === 404) {
+          clearInterval(statusInterval);
+          console.error("Kuis/Sesi hilang saat polling.");
+          // Opsional: Bisa paksa keluar juga jika mau ketat
+          endExam();
+          navigate("/dashboard");
+        }
+      }
+    };
+
+    // Jalankan setiap 5 detik (5000 ms)
+    const statusInterval = setInterval(checkStatus, 5000);
+
+    // Cleanup saat component unmount
+    return () => clearInterval(statusInterval);
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quizId]); // Dependency ke quizId
 
   // --- RENDER HELPERS ---
   const formatTime = (seconds) => {

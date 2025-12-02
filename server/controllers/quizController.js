@@ -82,6 +82,8 @@ const autoSubmitAllSubmissions = async (quizId) => {
   const submittedAt = new Date();
   let submittedCount = 0;
 
+  console.log(`🔄 Auto-submit untuk quiz ${quizId}: Found ${activeSubmissions.length} active submissions`);
+
   // Auto-submit setiap submission
   for (const submission of activeSubmissions) {
     // Hitung skor berdasarkan jawaban yang ada
@@ -89,34 +91,69 @@ const autoSubmitAllSubmissions = async (quizId) => {
     let score = 0;
 
     // Konversi Map answers ke object untuk memudahkan akses
-    const answersObj = submission.answers ? submission.answers.toObject() : {};
+    let answersObj = {};
+    try {
+      // Handle answers: bisa berupa Map (MongoDB) atau Plain Object (dari JSON)
+      if (submission.answers) {
+        if (submission.answers instanceof Map) {
+          // Konversi Map ke object
+          answersObj = Object.fromEntries(submission.answers);
+        } else if (typeof submission.answers === 'object' && submission.answers !== null) {
+          // Jika sudah plain object (biasa dari JSON/frontend)
+          answersObj = submission.answers;
+        } else {
+          console.log(`⚠️  Submission ${submission._id}: answers type tidak didukung:`, typeof submission.answers);
+        }
+      } else {
+        console.log(`⚠️  Submission ${submission._id}: answers kosong atau null`);
+      }
+    } catch (error) {
+      console.error(`❌ Error konversi answers untuk submission ${submission._id}:`, error.message);
+    }
+
+    console.log(`📝 Submission ${submission._id}: answers =`, answersObj);
 
     questions.forEach((q) => {
       const questionId = q._id.toString();
+      const userAnswer = answersObj[questionId];
+      const correctAnswer = q.correctAnswer;
+
+      console.log(`   Q ${q.questionNumber} (${questionId}): User=${userAnswer} Correct=${correctAnswer}`);
+
       // Jika ada jawaban dan benar, tambah skor
-      // Jika tidak ada jawaban atau salah, tetap 0 (tidak ditambah)
-      if (
-        answersObj[questionId] &&
-        answersObj[questionId] === q.correctAnswer
-      ) {
+      if (userAnswer && userAnswer === correctAnswer) {
         score += 1;
+        console.log(`   ✅ Score +1 (Total: ${score})`);
+      } else if (!userAnswer) {
+        console.log(`   ⭕ Unanswered, no score change`);
+      } else {
+        console.log(`   ❌ Wrong answer, no score change`);
       }
-      // Jika tidak ada jawaban, score tetap 0 (tidak perlu diubah)
     });
 
     // Hitung durasi
-    const duration = submittedAt.getTime() - submission.startTime.getTime();
+    const duration = Math.max(0, submittedAt.getTime() - submission.startTime.getTime());
 
-    // Update submission
+    console.log(`🔢 Final score untuk submission ${submission._id}: ${score}/${questions.length}`);
+
+    // Simpan semua perubahan ke database
     submission.status = "completed";
     submission.submittedAt = submittedAt;
     submission.score = score;
     submission.duration = duration;
+    // Pastikan answers tersimpan (meskipun seharusnya sudah ada)
+    if (!submission.answers || Object.keys(answersObj).length === 0) {
+      console.log(`📝 Submission ${submission._id}: answers kosong, menyimpan sebagai empty object`);
+      submission.answers = {};
+    }
 
     await submission.save();
     submittedCount++;
+
+    console.log(`✅ Submitted submission ${submission._id} with score ${score}`);
   }
 
+  console.log(`📊 Total ${submittedCount} submissions auto-submitted`);
   return submittedCount;
 };
 
